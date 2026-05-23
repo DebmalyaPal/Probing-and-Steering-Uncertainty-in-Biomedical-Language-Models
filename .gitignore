@@ -1,0 +1,93 @@
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-wheel-metadata/
+.installed.cfg
+
+# ============================================================================
+# Virtual environments
+# ============================================================================
+venv/
+venv_*/
+.venv/
+env/
+ENV/
+
+# ============================================================================
+# Jupyter
+# ============================================================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ============================================================================
+# HuggingFace model cache — weights are large and should not be committed.
+# The cache is typically at ~/.cache/huggingface/ but can be redirected here.
+# ============================================================================
+.cache/
+hf_cache/
+model_cache/
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+
+# ============================================================================
+# Large data files — raw corpus lives in data/bioscope/ which is small XML.
+# Processed JSON checkpoints ARE committed (they are small and reproducible).
+# ============================================================================
+# Uncomment to also ignore processed checkpoints:
+# data/processed/
+
+# ============================================================================
+# Result figures and large JSON — commit selectively.
+# Raw generation records (final_experiment.json) are ~1 MB each; keep them.
+# Uncomment the lines below if you want to exclude them from the repo.
+# ============================================================================
+# results/*/experiment.json
+# results/**/*.png
+# results/**/*.pdf
+
+# ============================================================================
+# IDEs and editors
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============================================================================
+# Environment / secrets
+# ============================================================================
+.env
+.env.*
+*.pem
+*.key
+
+# ============================================================================
+# Testing and coverage
+# ============================================================================
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# ============================================================================
+# Misc
+# ============================================================================
+*.log
+*.tmp
+*.bak
