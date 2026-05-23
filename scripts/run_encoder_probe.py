@@ -29,7 +29,7 @@ import numpy as np
 from src.model_registry  import get_config, list_models
 from src.model_loader    import load_model, get_device
 from src.bioscope_parser import build_balanced_contrast_set
-from src.experiment_runner import run_encoder_experiment
+from src.experiment_runner import run_encoder_experiment, ALPHAS
 from src.results_manager import save_results
 
 
@@ -97,14 +97,39 @@ def main():
     best = max(probe, key=lambda k: probe[k]["mean_acc"])
     print(f"\n  Best layer: {best}  ({probe[best]['mean_acc']:.2%})")
 
-    print(f"\nRepresentation steering summary (best layer)")
-    print(f"{'alpha':>7}  {'probe Δproj':>13}  {'ortho Δproj':>13}")
-    print("-" * 38)
+    print(f"\nRepresentation steering summary (best layer, probe direction)")
+    hdr = "{:>6}  {:>8}  {:>8}  {:>7}  {:>9}  {:>8}".format(
+        "alpha", "Δproj", "Δprob", "flip%", "Δcos_unc", "on-axis"
+    )
+    print(hdr)
+    print("-" * len(hdr))
     summary = results["summary"]
-    for af in [0.0, 0.05, 0.10, 0.15, 0.20, 0.25]:
-        pd = summary.get("probe", {}).get(str(af), {}).get("delta_mean", float("nan"))
-        od = summary.get("ortho", {}).get(str(af), {}).get("delta_mean", float("nan"))
-        print(f"  {af:.3f}  {pd:>13.4f}  {od:>13.4f}")
+    probe_s = summary.get("probe", {})
+    for af in ALPHAS:
+        s  = probe_s.get(str(af), {})
+        dp = s.get("delta_proj_mean",   float("nan"))
+        pr = s.get("prob_delta_mean",   float("nan"))
+        fr = s.get("flip_rate",         float("nan"))
+        cd = s.get("cos_delta_uncertain_centroid_mean", float("nan"))
+        oa = s.get("frac_shift_on_probe_axis_mean",     float("nan"))
+        print("{:>6.3f}  {:>+8.4f}  {:>+8.4f}  {:>6.1%}  {:>+9.5f}  {:>7.4f}".format(
+            af, dp, pr, fr, cd, oa
+        ))
+
+    print(f"\nRepresentation steering summary (ortho direction)")
+    ortho_s = summary.get("ortho", {})
+    print(hdr)
+    print("-" * len(hdr))
+    for af in ALPHAS:
+        s  = ortho_s.get(str(af), {})
+        dp = s.get("delta_proj_mean",   float("nan"))
+        pr = s.get("prob_delta_mean",   float("nan"))
+        fr = s.get("flip_rate",         float("nan"))
+        cd = s.get("cos_delta_uncertain_centroid_mean", float("nan"))
+        oa = s.get("frac_shift_on_probe_axis_mean",     float("nan"))
+        print("{:>6.3f}  {:>+8.4f}  {:>+8.4f}  {:>6.1%}  {:>+9.5f}  {:>7.4f}".format(
+            af, dp, pr, fr, cd, oa
+        ))
 
     print(f"\nResults saved → results/{args.model}/")
 

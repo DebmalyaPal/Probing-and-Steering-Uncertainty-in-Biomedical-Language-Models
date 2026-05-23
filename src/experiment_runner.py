@@ -258,10 +258,17 @@ def run_encoder_experiment(model_name: str, tok, model,
     """
     Probe + representation-steering analysis for an encoder (masked LM) model.
 
-    Since encoders cannot generate text, steering is evaluated by measuring
-    how injecting the probe direction shifts the representation's projection
-    onto the uncertainty axis (probe projection delta).
+    Steering metrics (per sentence, per alpha, per direction):
+      delta_proj        : shift along the probe axis (was: only metric)
+      prob_delta        : change in P(uncertain) from the fitted probe classifier
+      flipped           : whether the probe prediction crossed the decision boundary
+      cos_delta_centroid: change in cosine similarity to the uncertain centroid
+      frac_on_axis      : fraction of the total hidden-state shift that lands on
+                          the probe direction (1.0 = perfect, <1.0 = leakage)
     """
+    from sklearn.linear_model import LogisticRegression
+    from src.orthogonalization import cosine_similarity as _cos
+
     cfg = get_config(model_name)
     if device is None:
         device = get_device()
@@ -303,20 +310,38 @@ def run_encoder_experiment(model_name: str, tok, model,
         uncertain, certain, tok, model, layer,
         device=device, seed=PROBE_SEED, verbose=verbose,
     )
-    v_probe  = torch.tensor(ortho["v_probe"], dtype=torch.float32)
-    v_ortho  = torch.tensor(ortho["v_ortho_length_hedge"], dtype=torch.float32)
-    probe_unit = (v_probe / v_probe.norm()).numpy()
+    v_probe    = torch.tensor(ortho["v_probe"], dtype=torch.float32)
+    v_ortho    = torch.tensor(ortho["v_ortho_length_hedge"], dtype=torch.float32)
+    probe_unit = (v_probe / v_probe.norm()).numpy()   # unit vector
 
-    # 4. Calibrate hidden norms
+    # 5. Calibrate hidden norms
     hidden_norms = calibrate_hidden_norms(
         tok, model, model_name, layers=[layer], device=device,
     )
     hidden_norm = hidden_norms[layer]
 
-    # 5. Representation-steering analysis
-    # For each alpha, measure the mean probe-projection delta on the test set
-    test_sentences = uncertain[:40] + certain[:40]  # 80 balanced test sentences
-    test_labels    = [1] * 40 + [0] * 40
+    # 6. Extract full-dataset features at best layer for:
+    #    (a) fitting the probe classifier for probability scoring
+    #    (b) computing uncertain / certain centroids
+    if verbose:
+        print(f"\nExtracting features for probe classifier & centroids...")
+    all_sentences = uncertain + certain
+    y_all = np.array([1] * len(uncertain) + [0] * len(certain))
+    X_all = extract_features(all_sentences, tok, model, layer, device)
+
+    probe_clf = LogisticRegression(
+        max_iter=2000, C=0.1, random_state=PROBE_SEED
+    ).fit(X_all, y_all)
+
+    centroid_unc = X_all[y_all == 1].mean(axis=0)   # mean uncertain hidden state
+    centroid_cer = X_all[y_all == 0].mean(axis=0)   # mean certain hidden state
+    centroid_unc_unit = centroid_unc / np.linalg.norm(centroid_unc)
+    centroid_cer_unit = centroid_cer / np.linalg.norm(centroid_cer)
+
+    # 7. Representation-steering analysis
+    # Use the latter 40+40 sentences (not used to fit the probe) as test set
+    test_sentences = uncertain[160:] + certain[160:]   # held-out 40+40
+    test_labels    = [1] * len(uncertain[160:]) + [0] * len(certain[160:])
 
     direction_vectors = {
         "probe": v_probe / v_probe.norm(),
@@ -328,49 +353,114 @@ def run_encoder_experiment(model_name: str, tok, model,
 
     if verbose:
         print(f"\nRepresentation steering sweep (layer {layer})...")
+        print(f"  {'dir':>6}  {'α':>6}  {'Δproj':>8}  {'Δprob':>8}  "
+              f"{'flip%':>7}  {'Δcos_unc':>10}  {'on-axis':>8}")
 
     for dir_name, vec_unit in direction_vectors.items():
+        vec_unit_np = vec_unit.numpy()
         summary[dir_name] = {}
+
         for af in ALPHAS:
-            deltas = []
-            orig_projs = []
-            mod_projs = []
+            (deltas, prob_deltas, flips, flips_cer2unc, flips_unc2cer,
+             cos_deltas, frac_on_axis_vals) = [], [], [], [], [], [], []
+
             for text, label in zip(test_sentences, test_labels):
                 h_mod, h_orig = steer_representation(
                     text, tok, model, model_name, vec_unit,
                     alpha_frac=af, layer_idx=layer,
                     hidden_norm=hidden_norm, device=device,
                 )
+
+                # ── probe projection delta ──────────────────────────────
                 orig_proj = float(h_orig @ probe_unit)
                 mod_proj  = float(h_mod  @ probe_unit)
                 delta     = mod_proj - orig_proj
                 deltas.append(delta)
-                orig_projs.append(orig_proj)
-                mod_projs.append(mod_proj)
+
+                # ── probe classifier probability ────────────────────────
+                p_orig = float(probe_clf.predict_proba([h_orig])[0][1])
+                p_mod  = float(probe_clf.predict_proba([h_mod])[0][1])
+                prob_deltas.append(p_mod - p_orig)
+
+                pred_orig = int(p_orig >= 0.5)
+                pred_mod  = int(p_mod  >= 0.5)
+                flipped   = pred_orig != pred_mod
+                flips.append(int(flipped))
+                if label == 0:
+                    flips_cer2unc.append(int(flipped and pred_mod == 1))
+                else:
+                    flips_unc2cer.append(int(flipped and pred_mod == 0))
+
+                # ── cosine similarity to uncertain centroid ─────────────
+                cos_orig = float(
+                    (h_orig / (np.linalg.norm(h_orig) + 1e-9)) @ centroid_unc_unit
+                )
+                cos_mod  = float(
+                    (h_mod  / (np.linalg.norm(h_mod)  + 1e-9)) @ centroid_unc_unit
+                )
+                cos_deltas.append(cos_mod - cos_orig)
+
+                # ── on-axis fraction (how much shift is on probe axis?) ─
+                # delta_h = h_mod - h_orig = alpha * hidden_norm * vec_unit
+                # component along probe = (delta_h · probe_unit) * probe_unit
+                # leakage = ||delta_h - probe_component||
+                delta_h      = h_mod - h_orig
+                delta_h_norm = float(np.linalg.norm(delta_h))
+                if delta_h_norm > 1e-9:
+                    proj_scalar   = float(delta_h @ probe_unit)
+                    leakage_norm  = float(
+                        np.linalg.norm(delta_h - proj_scalar * probe_unit)
+                    )
+                    frac_on_axis  = abs(proj_scalar) / delta_h_norm
+                else:
+                    leakage_norm = 0.0
+                    frac_on_axis = 1.0
+                frac_on_axis_vals.append(frac_on_axis)
+
                 steer_records.append({
-                    "direction": dir_name,
-                    "alpha_frac": af,
-                    "layer": layer,
-                    "text": text,
-                    "label": label,
-                    "orig_proj": orig_proj,
-                    "mod_proj": mod_proj,
-                    "delta": delta,
+                    "direction": dir_name, "alpha_frac": af,
+                    "layer": layer, "label": label,
+                    "orig_proj": orig_proj, "mod_proj": mod_proj,
+                    "delta_proj": delta,
+                    "prob_uncertain_orig": p_orig,
+                    "prob_uncertain_mod":  p_mod,
+                    "prob_delta": p_mod - p_orig,
+                    "pred_orig": pred_orig, "pred_mod": pred_mod,
+                    "flipped": flipped,
+                    "cos_uncertain_centroid_orig": cos_orig,
+                    "cos_uncertain_centroid_mod":  cos_mod,
+                    "cos_delta_centroid": cos_mod - cos_orig,
+                    "frac_shift_on_probe_axis": frac_on_axis,
+                    "orthogonal_leakage_norm": leakage_norm,
                 })
 
+            flip_rate         = float(np.mean(flips))
+            flip_rate_c2u     = float(np.mean(flips_cer2unc)) if flips_cer2unc else 0.0
+            flip_rate_u2c     = float(np.mean(flips_unc2cer)) if flips_unc2cer else 0.0
+            mean_frac_on_axis = float(np.mean(frac_on_axis_vals))
+
             summary[dir_name][str(af)] = {
-                "delta_mean":    float(np.mean(deltas)),
-                "delta_std":     float(np.std(deltas, ddof=1)),
-                "delta_median":  float(np.median(deltas)),
-                "orig_proj_mean": float(np.mean(orig_projs)),
-                "mod_proj_mean":  float(np.mean(mod_projs)),
+                "delta_proj_mean":          float(np.mean(deltas)),
+                "delta_proj_std":           float(np.std(deltas, ddof=1)),
+                "delta_proj_median":        float(np.median(deltas)),
+                "prob_delta_mean":          float(np.mean(prob_deltas)),
+                "prob_delta_std":           float(np.std(prob_deltas, ddof=1)),
+                "flip_rate":                flip_rate,
+                "flip_rate_certain_to_uncertain": flip_rate_c2u,
+                "flip_rate_uncertain_to_certain": flip_rate_u2c,
+                "cos_delta_uncertain_centroid_mean": float(np.mean(cos_deltas)),
+                "cos_delta_uncertain_centroid_std":  float(np.std(cos_deltas, ddof=1)),
+                "frac_shift_on_probe_axis_mean": mean_frac_on_axis,
             }
 
             if verbose:
                 print(
-                    f"  {dir_name:>6}  α={af:.3f}  "
-                    f"Δproj={np.mean(deltas):+.4f} "
-                    f"(±{np.std(deltas, ddof=1):.4f})"
+                    f"  {dir_name:>6}  {af:.3f}  "
+                    f"{np.mean(deltas):>+8.3f}  "
+                    f"{np.mean(prob_deltas):>+8.3f}  "
+                    f"{flip_rate:>6.1%}  "
+                    f"{np.mean(cos_deltas):>+10.4f}  "
+                    f"{mean_frac_on_axis:>7.3f}"
                 )
 
     return {
