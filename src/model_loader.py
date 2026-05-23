@@ -10,7 +10,10 @@ Design decisions:
 """
 
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM
+from transformers import (
+    AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM,
+    BertTokenizer, BertForMaskedLM,
+)
 
 from src.model_registry import get_config
 
@@ -46,15 +49,32 @@ def load_model(model_name: str, device: str = None, force_cpu: bool = False):
         device = "cpu" if force_cpu else get_device()
 
     # ---- tokenizer --------------------------------------------------------
-    tok = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True)
+    # Load order:
+    #   1. Registry-specified tokenizer class (for old checkpoints like BlueBERT)
+    #   2. AutoTokenizer fast
+    #   3. AutoTokenizer slow  (no tokenizer.json)
+    #   4. BertTokenizer slow  (final fallback for BERT variants)
+    tok_class_name = cfg.get("tokenizer_class")
+    tok = None
+    if tok_class_name == "BertTokenizer":
+        tok = BertTokenizer.from_pretrained(hf_id)
+    else:
+        for kwargs in [{"use_fast": True}, {"use_fast": False}]:
+            try:
+                tok = AutoTokenizer.from_pretrained(
+                    hf_id, trust_remote_code=True, **kwargs
+                )
+                break
+            except (ValueError, OSError):
+                continue
+        if tok is None:
+            tok = BertTokenizer.from_pretrained(hf_id)
+
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
     # ---- model ------------------------------------------------------------
-    load_kwargs = dict(
-        output_hidden_states=True,
-        trust_remote_code=True,
-    )
+    load_kwargs = dict(output_hidden_states=True, trust_remote_code=True)
 
     if quantize:
         # Requires bitsandbytes: pip install bitsandbytes
@@ -68,7 +88,11 @@ def load_model(model_name: str, device: str = None, force_cpu: bool = False):
             torch.float16 if device == "cuda" else torch.float32
         )
 
-    if cfg["model_type"] == "decoder":
+    # Use registry-specified class for old checkpoints that lack model_type
+    model_class_name = cfg.get("model_class")
+    if model_class_name == "BertForMaskedLM":
+        model = BertForMaskedLM.from_pretrained(hf_id, **load_kwargs)
+    elif cfg["model_type"] == "decoder":
         model = AutoModelForCausalLM.from_pretrained(hf_id, **load_kwargs)
     else:
         model = AutoModelForMaskedLM.from_pretrained(hf_id, **load_kwargs)

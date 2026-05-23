@@ -116,6 +116,10 @@ MODEL_REGISTRY = {
         "probe_layers": list(range(13)),
         "steer_layer": None,
         "quantize": False,
+        # Very old checkpoint: config.json has no model_type field, so
+        # AutoModelForMaskedLM cannot resolve it. Load with explicit class.
+        "model_class": "BertForMaskedLM",
+        "tokenizer_class": "BertTokenizer",
     },
     "scibert": {
         "hf_id": "allenai/scibert_scivocab_uncased",
