@@ -84,7 +84,8 @@ def load_model(model_name: str, device: str = None, force_cpu: bool = False):
         # float16 on MPS is incomplete — many ops (e.g. matmul variants used
         # in the final BERT layer) raise dtype assertion errors at runtime.
         # Use float16 only on CUDA where it is fully supported.
-        load_kwargs["torch_dtype"] = (
+        # Note: transformers>=4.45 uses 'dtype' instead of 'torch_dtype'.
+        load_kwargs["dtype"] = (
             torch.float16 if device == "cuda" else torch.float32
         )
 
