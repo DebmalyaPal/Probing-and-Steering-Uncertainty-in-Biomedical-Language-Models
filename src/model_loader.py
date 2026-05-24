@@ -26,36 +26,48 @@ def get_device() -> str:
     return "cpu"
 
 
-def load_model(model_name: str, device: str = None, force_cpu: bool = False):
+def load_model(model_name: str, device: str = None, force_cpu: bool = False, dtype: str = "float32"):
     """
     Load tokenizer and model for *model_name*.
 
     Parameters
     ----------
-    model_name  : Key in MODEL_REGISTRY (e.g. "biogpt", "biobert").
-    device      : Override auto-detected device string.
-    force_cpu   : Useful for unit tests; ignores quantization flags.
-
-    Returns
-    -------
-    tok   : Tokenizer (with pad token set when missing).
-    model : Model in eval mode, placed on *device*.
+    model_name : str
+        Key in MODEL_REGISTRY
+    device : str
+        cuda / cpu / mps (auto-detected if None)
+    force_cpu : bool
+        Forces CPU mode (useful for debugging)
+    dtype : str
+        float32 | float16 | bfloat16
     """
+
     cfg = get_config(model_name)
     hf_id = cfg["hf_id"]
     quantize = cfg["quantize"] and not force_cpu
 
+    # ---------------- device ----------------
     if device is None:
         device = "cpu" if force_cpu else get_device()
 
-    # ---- tokenizer --------------------------------------------------------
-    # Load order:
-    #   1. Registry-specified tokenizer class (for old checkpoints like BlueBERT)
-    #   2. AutoTokenizer fast
-    #   3. AutoTokenizer slow  (no tokenizer.json)
-    #   4. BertTokenizer slow  (final fallback for BERT variants)
+    # ---------------- dtype mapping ----------------
+    dtype_map = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }
+
+    # safety: bfloat16 only on supported hardware
+    if dtype == "bfloat16" and device != "cuda":
+        print("[warn] bfloat16 not supported on this device → falling back to float32")
+        dtype = "float32"
+
+    torch_dtype = dtype_map[dtype]
+
+    # ---------------- tokenizer ----------------
     tok_class_name = cfg.get("tokenizer_class")
     tok = None
+
     if tok_class_name == "BertTokenizer":
         tok = BertTokenizer.from_pretrained(hf_id)
     else:
@@ -67,40 +79,39 @@ def load_model(model_name: str, device: str = None, force_cpu: bool = False):
                 break
             except (ValueError, OSError):
                 continue
+
         if tok is None:
             tok = BertTokenizer.from_pretrained(hf_id)
 
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
 
-    # ---- model ------------------------------------------------------------
-    load_kwargs = dict(output_hidden_states=True, trust_remote_code=True)
+    # ---------------- model kwargs ----------------
+    load_kwargs = dict(
+        output_hidden_states=True,
+        trust_remote_code=True
+    )
 
     if quantize:
-        # Requires bitsandbytes: pip install bitsandbytes
+        # 8-bit quantization path (7B models)
         load_kwargs["load_in_8bit"] = True
         load_kwargs["device_map"] = "auto"
     else:
-        # float16 on MPS is incomplete — many ops (e.g. matmul variants used
-        # in the final BERT layer) raise dtype assertion errors at runtime.
-        # Use float16 only on CUDA where it is fully supported.
-        # Always float32 for non-quantized models.
-        # float16 causes ~10pp probe accuracy loss on deep models (accumulated
-        # rounding errors wash out the uncertainty signal in later layers).
-        # float16 on MPS raises dtype assertion errors at runtime.
-        # Memory cost is acceptable: largest non-quantized model (BioMedLM,
-        # 2.7B) uses ~11 GB float32, within a 16 GB GPU budget.
-        load_kwargs["dtype"] = torch.float32
+        load_kwargs["torch_dtype"] = torch_dtype
 
-    # Use registry-specified class for old checkpoints that lack model_type
+    # ---------------- model class selection ----------------
     model_class_name = cfg.get("model_class")
+
     if model_class_name == "BertForMaskedLM":
         model = BertForMaskedLM.from_pretrained(hf_id, **load_kwargs)
+
     elif cfg["model_type"] == "decoder":
         model = AutoModelForCausalLM.from_pretrained(hf_id, **load_kwargs)
+
     else:
         model = AutoModelForMaskedLM.from_pretrained(hf_id, **load_kwargs)
 
+    # ---------------- device placement ----------------
     if not quantize:
         model = model.to(device)
 
