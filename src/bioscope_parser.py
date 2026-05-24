@@ -35,7 +35,7 @@ def extract_sentences_from_bioscope(xml_path):
 def build_balanced_contrast_set(bioscope_dir, max_per_class=200, seed=42):
     """Parse all BioScope files and return balanced uncertain/certain lists."""
     bioscope_dir = Path(bioscope_dir)
-    xml_files = list(bioscope_dir.rglob("*.xml"))
+    xml_files = sorted(bioscope_dir.rglob("*.xml"))  # sort for cross-platform reproducibility
     print(f"Found {len(xml_files)} BioScope XML files")
 
     all_uncertain = []
