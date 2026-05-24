@@ -1,9 +1,10 @@
 """
 Standardised results persistence.
 
-All results are stored under  results/{model_name}/  as JSON files so that
-cross-model comparisons can be done from any notebook without re-running
-experiments.
+All results are stored under  results/{model_name}/{dtype}/  as JSON files so
+that cross-model comparisons can be done from any notebook without re-running
+experiments.  The dtype subfolder (e.g. "float32", "float16") tracks which
+numeric precision was used for the run.
 """
 
 import json
@@ -30,19 +31,21 @@ def _json_safe(obj):
     return obj
 
 
-def save_results(model_name: str, tag: str, data: dict) -> Path:
+def save_results(model_name: str, tag: str, data: dict,
+                 dtype: str = "float32") -> Path:
     """
-    Persist *data* as JSON under  results/{model_name}/{tag}.json.
+    Persist *data* as JSON under  results/{model_name}/{dtype}/{tag}.json.
 
     Parameters
     ----------
     model_name : Registry key (e.g. "biogpt_large").
     tag        : Filename stem (e.g. "experiment", "probe_accuracy").
     data       : Serialisable dict.
+    dtype      : Numeric precision used for the run (e.g. "float32", "float16").
 
     Returns the Path where the file was written.
     """
-    out_dir = RESULTS_ROOT / model_name
+    out_dir = RESULTS_ROOT / model_name / dtype
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{tag}.json"
     with open(out_path, "w") as f:
@@ -51,27 +54,27 @@ def save_results(model_name: str, tag: str, data: dict) -> Path:
     return out_path
 
 
-def load_results(model_name: str, tag: str) -> dict:
+def load_results(model_name: str, tag: str, dtype: str = "float32") -> dict:
     """Load previously saved results."""
-    path = RESULTS_ROOT / model_name / f"{tag}.json"
+    path = RESULTS_ROOT / model_name / dtype / f"{tag}.json"
     if not path.exists():
         raise FileNotFoundError(f"No results found at {path}")
     with open(path) as f:
         return json.load(f)
 
 
-def results_exist(model_name: str, tag: str) -> bool:
-    return (RESULTS_ROOT / model_name / f"{tag}.json").exists()
+def results_exist(model_name: str, tag: str, dtype: str = "float32") -> bool:
+    return (RESULTS_ROOT / model_name / dtype / f"{tag}.json").exists()
 
 
-def list_saved(model_name: str) -> list:
-    d = RESULTS_ROOT / model_name
+def list_saved(model_name: str, dtype: str = "float32") -> list:
+    d = RESULTS_ROOT / model_name / dtype
     if not d.exists():
         return []
     return sorted(p.stem for p in d.glob("*.json"))
 
 
-def load_all_probe_results() -> dict:
+def load_all_probe_results(dtype: str = "float32") -> dict:
     """
     Aggregate probe accuracy results across all models that have been run.
 
@@ -81,7 +84,7 @@ def load_all_probe_results() -> dict:
     for model_dir in sorted(RESULTS_ROOT.iterdir()):
         if not model_dir.is_dir():
             continue
-        tag_path = model_dir / "experiment.json"
+        tag_path = model_dir / dtype / "experiment.json"
         if tag_path.exists():
             data = json.loads(tag_path.read_text())
             if "probe_results" in data:

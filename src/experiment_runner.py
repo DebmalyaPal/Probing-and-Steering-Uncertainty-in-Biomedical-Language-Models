@@ -23,7 +23,7 @@ import transformers
 from datetime import datetime
 from pathlib import Path
 
-from src.model_registry import get_config
+from src.model_registry import get_config, two_thirds_layer
 from src.model_loader import get_device
 from src.probing import (
     run_probing_sweep, best_layer,
@@ -100,6 +100,7 @@ def run_decoder_experiment(model_name: str, tok, model,
                             steer_layer: int = None,
                             alphas: list = None,
                             seeds: list = None,
+                            dtype: str = "float32",
                             verbose: bool = True) -> dict:
     """
     Full probe + steer experiment for a causal-LM model.
@@ -130,12 +131,13 @@ def run_decoder_experiment(model_name: str, tok, model,
         "n_certain": len(certain),
         "n_splits": 5,
         "results": {str(k): v for k, v in probe_results.items()},
-    })
+    }, dtype=dtype)
 
-    # 3. Select best layer for steering.
-    #    Layer 0 = embedding output — it cannot be intercepted via the
-    #    transformer layer list, so fall back to the best non-embedding layer.
-    layer = steer_layer if steer_layer is not None else best_layer(probe_results)
+    # 3. Select steering layer.
+    #    Priority: explicit argument > registry value > 2/3-depth rule.
+    #    The 2/3-depth rule balances representational maturity against
+    #    propagation distance and reproduces the original paper's L16 for BioGPT.
+    layer = steer_layer if steer_layer is not None else two_thirds_layer(model_name)
     if layer == 0:
         layer = max(
             (l for l in probe_results if l >= 1),
@@ -254,6 +256,7 @@ def run_decoder_experiment(model_name: str, tok, model,
 def run_encoder_experiment(model_name: str, tok, model,
                             uncertain: list, certain: list,
                             device: str = None,
+                            dtype: str = "float32",
                             verbose: bool = True) -> dict:
     """
     Probe + representation-steering analysis for an encoder (masked LM) model.
@@ -288,10 +291,10 @@ def run_encoder_experiment(model_name: str, tok, model,
         "n_certain": len(certain),
         "n_splits": 5,
         "results": {str(k): v for k, v in probe_results.items()},
-    })
+    }, dtype=dtype)
 
-    # 3. Best layer (must be >= 1; layer 0 = embedding, cannot be hooked)
-    layer = best_layer(probe_results)
+    # 3. Steering layer: 2/3-depth rule (layer 0 = embedding, cannot be hooked)
+    layer = two_thirds_layer(model_name)
     if layer == 0:
         layer = max(
             (l for l in probe_results if l >= 1),
@@ -487,6 +490,7 @@ def run_encoder_experiment(model_name: str, tok, model,
 def run_experiment(model_name: str, tok, model,
                    uncertain: list, certain: list,
                    device: str = None,
+                   dtype: str = "float32",
                    **kwargs) -> dict:
     """
     Dispatch to the correct experiment based on model type.
@@ -496,10 +500,10 @@ def run_experiment(model_name: str, tok, model,
     if model_type == "decoder":
         return run_decoder_experiment(
             model_name, tok, model, uncertain, certain,
-            device=device, **kwargs,
+            device=device, dtype=dtype, **kwargs,
         )
     else:
         return run_encoder_experiment(
             model_name, tok, model, uncertain, certain,
-            device=device, **kwargs,
+            device=device, dtype=dtype, **kwargs,
         )

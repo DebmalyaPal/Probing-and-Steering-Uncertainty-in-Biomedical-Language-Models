@@ -44,6 +44,10 @@ def main():
         "--max_per_class", type=int, default=200,
         help="Sentences per class (default 200, matches paper)",
     )
+    parser.add_argument(
+        "--dtype", default="float32", choices=["float32", "float16", "bfloat16"],
+        help="Numeric precision used for the run (default: float32)",
+    )
     args = parser.parse_args()
 
     cfg    = get_config(args.model)
@@ -75,11 +79,12 @@ def main():
         args.model, tok, model,
         uncertain, certain,
         device=device,
+        dtype=args.dtype,
         verbose=True,
     )
 
     # ── save ──────────────────────────────────────────────────────────────
-    save_results(args.model, "experiment", results)
+    save_results(args.model, "experiment", results, dtype=args.dtype)
 
     # ── summary table ─────────────────────────────────────────────────────
     print(f"\n{'='*60}")
@@ -131,7 +136,7 @@ def main():
             af, dp, pr, fr, cd, oa
         ))
 
-    print(f"\nResults saved → results/{args.model}/")
+    print(f"\nResults saved → results/{args.model}/{args.dtype}/")
 
 
 if __name__ == "__main__":

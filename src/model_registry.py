@@ -156,6 +156,22 @@ def get_layers(model, model_name: str):
     return obj
 
 
+def two_thirds_layer(model_name: str) -> int:
+    """
+    Return the layer index closest to 2/3 of the model's depth.
+
+    Rationale: steering at ~2/3 depth balances representational maturity
+    (hidden states encode abstract semantics by this point) against
+    propagation distance (enough downstream blocks remain to shape output).
+    This rule also reproduces the original paper's choice of layer 16 for
+    BioGPT (round(24 * 2/3) = 16).
+
+    Used as the default steer_layer when the registry has steer_layer=None.
+    """
+    n = get_config(model_name)["num_layers"]
+    return round(n * 2 / 3)
+
+
 def list_models(model_type: str = None):
     """List model names, optionally filtered by type ('decoder'/'encoder')."""
     return [

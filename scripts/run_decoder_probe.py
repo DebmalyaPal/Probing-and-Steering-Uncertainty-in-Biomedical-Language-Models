@@ -50,6 +50,10 @@ def main():
         "--steer_layer", type=int, default=None,
         help="Override steering layer (default: auto from probing)",
     )
+    parser.add_argument(
+        "--dtype", default="float32", choices=["float32", "float16", "bfloat16"],
+        help="Numeric precision used for the run (default: float32)",
+    )
     args = parser.parse_args()
 
     cfg    = get_config(args.model)
@@ -78,16 +82,19 @@ def main():
     print(f"  Loaded.\n")
 
     # ── experiment ────────────────────────────────────────────────────────
+    # Steer layer priority: CLI flag > registry value > auto (best from probing)
+    steer_layer = args.steer_layer if args.steer_layer is not None else cfg["steer_layer"]
     results = run_decoder_experiment(
         args.model, tok, model,
         uncertain, certain,
         device=device,
-        steer_layer=args.steer_layer,
+        steer_layer=steer_layer,
+        dtype=args.dtype,
         verbose=True,
     )
 
     # ── save ──────────────────────────────────────────────────────────────
-    save_results(args.model, "experiment", results)
+    save_results(args.model, "experiment", results, dtype=args.dtype)
 
     # ── summary: probe accuracy by layer ──────────────────────────────────
     print(f"\n{'='*60}")
@@ -125,7 +132,7 @@ def main():
                 af, hg, pp, ld, tv
             ))
 
-    print(f"\nResults saved → results/{args.model}/")
+    print(f"\nResults saved → results/{args.model}/{args.dtype}/")
 
 
 if __name__ == "__main__":

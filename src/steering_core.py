@@ -178,7 +178,7 @@ def generate_steered(prompts: list, tok, model, model_name: str,
             max_length=64,
         ).to(device)
         with torch.no_grad():
-            out = model.generate(
+            outputs = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 min_new_tokens=20,
@@ -188,8 +188,10 @@ def generate_steered(prompts: list, tok, model, model_name: str,
                 repetition_penalty=1.2,
                 pad_token_id=tok.pad_token_id,
                 use_cache=True,
+                return_dict_in_generate=False,
             )
-        return [tok.decode(seq, skip_special_tokens=True) for seq in out]
+        sequences = outputs if isinstance(outputs, torch.Tensor) else outputs.sequences
+        return tok.batch_decode(sequences, skip_special_tokens=True)
     finally:
         if handle is not None:
             handle.remove()
