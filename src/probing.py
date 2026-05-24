@@ -139,6 +139,46 @@ def best_layer(probe_results: dict) -> int:
     return max(probe_results, key=lambda l: probe_results[l]["mean_acc"])
 
 
+def best_layer_near_anchor(probe_results: dict, anchor: int,
+                           window: int = 2) -> int:
+    """
+    Select the steering layer within [anchor-window, anchor+window].
+
+    Rationale: the 2/3-depth rule provides a theoretically motivated prior
+    on where representations are semantically mature enough to steer but
+    far enough from the output that the perturbation can propagate.  Within
+    that neighbourhood the empirical probe accuracy breaks ties, preferring
+    the layer where the uncertainty signal is strongest.  Ties in mean
+    accuracy are resolved by minimum standard deviation (preferring the
+    more reliable probe across CV folds).
+
+    Layer 0 (embedding output) is excluded because it has no hookable
+    transformer-block module.
+
+    Parameters
+    ----------
+    probe_results : dict returned by run_probing_sweep (integer keys).
+    anchor        : 2/3-depth layer index, e.g. from two_thirds_layer().
+    window        : Number of layers to search on each side of anchor.
+
+    Returns
+    -------
+    int : selected layer index.
+    """
+    candidates = [
+        l for l in range(anchor - window, anchor + window + 1)
+        if l >= 1 and l in probe_results
+    ]
+    if not candidates:
+        raise ValueError(
+            f"No probe results in window [{anchor - window}, {anchor + window}]. "
+            f"Available layers: {sorted(probe_results.keys())}"
+        )
+    return max(candidates,
+               key=lambda l: (probe_results[l]["mean_acc"],
+                              -probe_results[l]["std_acc"]))
+
+
 # --------------------------------------------------------------------------- #
 # Probe vector (direction) extraction                                          #
 # --------------------------------------------------------------------------- #

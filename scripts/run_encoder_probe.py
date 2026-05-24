@@ -84,7 +84,7 @@ def main():
     )
 
     # ── save ──────────────────────────────────────────────────────────────
-    save_results(args.model, "experiment", results, dtype=args.dtype)
+    save_results(args.model, "experiment", results, device=device, dtype=args.dtype)
 
     # ── summary table ─────────────────────────────────────────────────────
     print(f"\n{'='*60}")
@@ -136,7 +136,7 @@ def main():
             af, dp, pr, fr, cd, oa
         ))
 
-    print(f"\nResults saved → results/{args.model}/{args.dtype}/")
+    print(f"\nResults saved → results/{args.model}/{device}/{args.dtype}/")
 
 
 if __name__ == "__main__":

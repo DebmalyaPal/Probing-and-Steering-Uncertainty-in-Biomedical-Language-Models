@@ -94,7 +94,7 @@ def main():
     )
 
     # ── save ──────────────────────────────────────────────────────────────
-    save_results(args.model, "experiment", results, dtype=args.dtype)
+    save_results(args.model, "experiment", results, device=device, dtype=args.dtype)
 
     # ── summary: probe accuracy by layer ──────────────────────────────────
     print(f"\n{'='*60}")
@@ -132,7 +132,7 @@ def main():
                 af, hg, pp, ld, tv
             ))
 
-    print(f"\nResults saved → results/{args.model}/{args.dtype}/")
+    print(f"\nResults saved → results/{args.model}/{device}/{args.dtype}/")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ MODEL_REGISTRY = {
         # Every layer: 0 = embedding output, 1–24 = transformer block outputs.
         # Layer index here corresponds directly to hidden_states[i].
         "probe_layers": list(range(25)),   # 0–24, all 25 hidden states
-        "steer_layer": 16,                 # from original paper
+        "steer_layer": None,               # auto-selected by window search around 2/3-depth anchor
         "quantize": False,
     },
     "biogpt_large": {

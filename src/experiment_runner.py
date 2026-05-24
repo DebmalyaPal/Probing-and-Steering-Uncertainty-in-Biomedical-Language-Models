@@ -26,7 +26,7 @@ from pathlib import Path
 from src.model_registry import get_config, two_thirds_layer
 from src.model_loader import get_device
 from src.probing import (
-    run_probing_sweep, best_layer,
+    run_probing_sweep, best_layer, best_layer_near_anchor,
     build_probe_vectors_at_layers, extract_features,
 )
 from src.orthogonalization import build_orthogonal_directions
@@ -131,23 +131,24 @@ def run_decoder_experiment(model_name: str, tok, model,
         "n_certain": len(certain),
         "n_splits": 5,
         "results": {str(k): v for k, v in probe_results.items()},
-    }, dtype=dtype)
+    }, device=device, dtype=dtype)
 
     # 3. Select steering layer.
-    #    Priority: explicit argument > registry value > 2/3-depth rule.
-    #    The 2/3-depth rule balances representational maturity against
-    #    propagation distance and reproduces the original paper's L16 for BioGPT.
-    layer = steer_layer if steer_layer is not None else two_thirds_layer(model_name)
-    if layer == 0:
-        layer = max(
-            (l for l in probe_results if l >= 1),
-            key=lambda l: probe_results[l]["mean_acc"],
-        )
-        if verbose:
-            print(f"  (layer 0 is embedding-only; selected layer {layer} instead)")
+    #    Priority: explicit argument > window search around 2/3-depth anchor.
+    #    The anchor (round(N * 2/3)) balances representational maturity against
+    #    propagation distance.  Within ±2 layers of the anchor, we pick the
+    #    layer with the highest mean probe accuracy (min-std tiebreak).
+    if steer_layer is not None:
+        layer = steer_layer
+    else:
+        anchor = two_thirds_layer(model_name)
+        layer = best_layer_near_anchor(probe_results, anchor, window=2)
+    anchor = two_thirds_layer(model_name) if steer_layer is None else layer
     if verbose:
         print(f"\nSelected steering layer: {layer} "
-              f"(acc={probe_results[layer]['mean_acc']:.2%})")
+              f"(acc={probe_results[layer]['mean_acc']:.2%}  "
+              f"std={probe_results[layer]['std_acc']:.2%}  "
+              f"anchor={anchor})")
 
     # 4. Orthogonalization
     if verbose:
@@ -233,6 +234,7 @@ def run_decoder_experiment(model_name: str, tok, model,
         "config": {
             "model_name": model_name,
             "layer": layer,
+            "layer_anchor_two_thirds": two_thirds_layer(model_name),
             "alphas": alphas,
             "seeds": seeds,
             "prompts": PROMPTS,
@@ -291,20 +293,16 @@ def run_encoder_experiment(model_name: str, tok, model,
         "n_certain": len(certain),
         "n_splits": 5,
         "results": {str(k): v for k, v in probe_results.items()},
-    }, dtype=dtype)
+    }, device=device, dtype=dtype)
 
-    # 3. Steering layer: 2/3-depth rule (layer 0 = embedding, cannot be hooked)
-    layer = two_thirds_layer(model_name)
-    if layer == 0:
-        layer = max(
-            (l for l in probe_results if l >= 1),
-            key=lambda l: probe_results[l]["mean_acc"],
-        )
-        if verbose:
-            print(f"  (layer 0 is embedding-only; selected layer {layer} instead)")
+    # 3. Steering layer: best within ±2 of 2/3-depth anchor.
+    anchor = two_thirds_layer(model_name)
+    layer = best_layer_near_anchor(probe_results, anchor, window=2)
     if verbose:
-        print(f"\nBest layer: {layer} "
-              f"(acc={probe_results[layer]['mean_acc']:.2%})")
+        print(f"\nSelected steering layer: {layer} "
+              f"(acc={probe_results[layer]['mean_acc']:.2%}  "
+              f"std={probe_results[layer]['std_acc']:.2%}  "
+              f"anchor={anchor})")
 
     # 4. Orthogonalization
     if verbose:
@@ -470,6 +468,7 @@ def run_encoder_experiment(model_name: str, tok, model,
         "config": {
             "model_name": model_name,
             "layer": layer,
+            "layer_anchor_two_thirds": anchor,
             "alphas": ALPHAS,
             "n_contrast_uncertain": len(uncertain),
             "n_contrast_certain": len(certain),
