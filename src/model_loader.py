@@ -84,10 +84,13 @@ def load_model(model_name: str, device: str = None, force_cpu: bool = False):
         # float16 on MPS is incomplete — many ops (e.g. matmul variants used
         # in the final BERT layer) raise dtype assertion errors at runtime.
         # Use float16 only on CUDA where it is fully supported.
-        # Note: transformers>=4.45 uses 'dtype' instead of 'torch_dtype'.
-        load_kwargs["dtype"] = (
-            torch.float16 if device == "cuda" else torch.float32
-        )
+        # Always float32 for non-quantized models.
+        # float16 causes ~10pp probe accuracy loss on deep models (accumulated
+        # rounding errors wash out the uncertainty signal in later layers).
+        # float16 on MPS raises dtype assertion errors at runtime.
+        # Memory cost is acceptable: largest non-quantized model (BioMedLM,
+        # 2.7B) uses ~11 GB float32, within a 16 GB GPU budget.
+        load_kwargs["dtype"] = torch.float32
 
     # Use registry-specified class for old checkpoints that lack model_type
     model_class_name = cfg.get("model_class")
